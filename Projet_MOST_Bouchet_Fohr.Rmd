@@ -1,0 +1,881 @@
+---
+title: "Projet MOST"
+author: "Alice Fohr - Pierre Bouchet"
+date: "12 janvier 2024"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+    number_sections: true
+subtitle: Impact de la pêche et du changement climatique sur les populations de crabes
+  de l'île Kodiak en Alaska
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, # Ici, par défaut, les chunks seront invisibles
+                      eval = TRUE, # Tous les chunks sont évalués par défaut
+                      fig.align = "center", # Les figures sont centrées
+                      fig.width = 6,
+                      fig.height = 4, 
+                      message = FALSE, # Les messages de R ne sont pas sortis
+                      warning = FALSE) # Les avertissement de R ne sont pas sortis
+knitr::opts_knit$set(root.dir = "C:/R/MOST/Projet") #specifier votre répertoire de travail
+```
+
+```{r packages, include = FALSE}
+library(readr)
+library(ggplot2)
+library(maps)
+library(leaflet)
+library(dplyr)
+library(zoo)
+library(corrplot)
+library(reshape2)
+library(Hmisc)
+library(tidyr)
+library(lme4)
+library(ggcorrplot)
+library(knitr)
+library(tinytex)
+library(ggspatial)
+library(paletteer)
+library(gridExtra)
+```
+
+```{r chargement des données}
+salinity_data <- read.table("salinity", header = TRUE, col.names = c("Year", "Month", "Salinity"))
+celsius_data <- read.table("celsius", header = FALSE, col.names = c("Year", "Month", "Temperature"))
+survey_data <- read.table("survey", header = FALSE, col.names = c("Year", "Fishing_District", "Station_Identifier", "Number_of_Pots_Fished", "Latitude", "Longitude", "PreRecruit4_Crab", "PreRecruit3_Crab", "PreRecruit2_Crab", "PreRecruit1_Crab", "Recruit_Males", "PostRecruit_Males", "Juvenile_Females", "Adult_Females"))
+#Nettoyer et préparer les données
+survey_data <- survey_data %>%
+  mutate(Longitude = -Longitude)
+survey_data$Total_crabs <- rowSums(survey_data[, c("PreRecruit4_Crab", "PreRecruit3_Crab", "PreRecruit2_Crab", "PreRecruit1_Crab", "Recruit_Males", "PostRecruit_Males", "Juvenile_Females", "Adult_Females")], na.rm = TRUE)
+survey_data$Total_male <- rowSums(survey_data[, c("PreRecruit4_Crab", "PreRecruit3_Crab", "PreRecruit2_Crab", "PreRecruit1_Crab", "Recruit_Males", "PostRecruit_Males")], na.rm = TRUE)
+survey_data$Total_female <- rowSums(survey_data[, c("Juvenile_Females", "Adult_Females")], na.rm = TRUE)
+survey_data$radius <- sqrt(survey_data$Total_crabs)/10 #Échelle linéaire pour la carte
+environment_data <- merge(salinity_data, celsius_data, by = c("Year", "Month"), all = TRUE)
+data_environment_crab <- merge(survey_data, environment_data, by = c("Year"), all = TRUE)
+data_environment_crab_clean <- na.omit(data_environment_crab)
+data_environment_crab_clean_ratio <- data_environment_crab_clean %>%
+  mutate(
+    ratio_total_crabs = Total_crabs / Number_of_Pots_Fished,
+    ratio_total_male = Total_male / Number_of_Pots_Fished,
+    ratio_total_female = Total_female / Number_of_Pots_Fished,
+    # Ajout de ratios pour chaque catégorie de crabes
+    ratio_PreRecruit4_Crab = PreRecruit4_Crab / Number_of_Pots_Fished,
+    ratio_PreRecruit3_Crab = PreRecruit3_Crab / Number_of_Pots_Fished,
+    ratio_PreRecruit2_Crab = PreRecruit2_Crab / Number_of_Pots_Fished,
+    ratio_PreRecruit1_Crab = PreRecruit1_Crab / Number_of_Pots_Fished,
+    ratio_Recruit_Males = Recruit_Males / Number_of_Pots_Fished,
+    ratio_PostRecruit_Males = PostRecruit_Males / Number_of_Pots_Fished,
+    ratio_Juvenile_Females = Juvenile_Females / Number_of_Pots_Fished,
+    ratio_Adult_Females = Adult_Females / Number_of_Pots_Fished,
+    ratio_male_femelle = Total_male/Total_female
+  )
+data_environment_crab_clean_ratio <- data_environment_crab_clean_ratio %>%
+  mutate(
+    Season = case_when(
+      Month %in% c(10, 11, 12, 1, 2, 3) ~ "Hiver",
+      Month %in% c(4, 5, 6, 7, 8, 9) ~ "Ete",
+      TRUE ~ NA_character_
+    )
+  )
+data_environment_crab_clean_summary <- data_environment_crab_clean_ratio %>%
+  group_by(Year, Season) %>%
+  summarise(
+    Total_crabs = sum(Total_crabs, na.rm = TRUE),
+    Total_male = sum(Total_male, na.rm = TRUE),
+    Total_female = sum(Total_female, na.rm = TRUE),
+    ratio_total_crabs = sum(ratio_total_crabs, na.rm = TRUE),
+    ratio_total_male = sum(ratio_total_male, na.rm = TRUE),
+    ratio_total_female = sum(ratio_total_female, na.rm = TRUE),
+    PreRecruit4_Crab = sum(PreRecruit4_Crab, na.rm = TRUE),
+    PreRecruit3_Crab = sum(PreRecruit3_Crab, na.rm = TRUE),
+    PreRecruit2_Crab = sum(PreRecruit2_Crab, na.rm = TRUE),
+    PreRecruit1_Crab = sum(PreRecruit1_Crab, na.rm = TRUE),
+    Recruit_Males = sum(Recruit_Males, na.rm = TRUE),
+    PostRecruit_Males = sum(PostRecruit_Males, na.rm = TRUE),
+    Juvenile_Females = sum(Juvenile_Females, na.rm = TRUE),
+    Adult_Females = sum(Adult_Females, na.rm = TRUE),
+    ratio_PreRecruit4_Crab = sum(ratio_PreRecruit4_Crab, na.rm = TRUE),
+    ratio_PreRecruit3_Crab = sum(ratio_PreRecruit3_Crab, na.rm = TRUE),
+    ratio_PreRecruit2_Crab = sum(ratio_PreRecruit2_Crab, na.rm = TRUE),
+    ratio_PreRecruit1_Crab = sum(ratio_PreRecruit1_Crab, na.rm = TRUE),
+    ratio_Recruit_Males = sum(ratio_Recruit_Males, na.rm = TRUE),
+    ratio_PostRecruit_Males = sum(ratio_PostRecruit_Males, na.rm = TRUE),
+    ratio_Juvenile_Females = sum(ratio_Juvenile_Females, na.rm = TRUE),
+    ratio_Adult_Females = sum(ratio_Adult_Females, na.rm = TRUE),
+    Temperature = mean(Temperature, na.rm = TRUE),
+    Salinity = mean(Salinity, na.rm = TRUE)
+  )
+```
+<br>
+
+# **Présentation des données, lieu d'étude et questions écologiques**
+<br>
+
+## **Présentation des données et du site d'étude**
+
+<br>
+
+<div style="text-align: justify;">
+L'île Kodiak, située au large de l'Alaska et reconnue comme la deuxième plus grande île des États-Unis (Figure 01), abrite une population significative de crabes royaux (*Paralithodes camtschaticus*). Cette île montagneuse et forestière est au cœur de la plus grande pêcherie de crabes royaux. Le présent rapport se focalise sur l'analyse des données recueillies lors d'une enquête approfondie sur ces populations, menée en 1990 sous l'égide de la Société américaine de statistiques. Ces données révèlent la dynamique complexe des populations de crabes, influencée historiquement par une pêche intensive, atteignant son apogée dans les années 1960 et déclinant par la suite. Cette surexploitation a provoqué un déséquilibre notable dans le sexe-ratio, perturbant la capacité reproductrice et la dynamique populationnelle de l'espèce (Bechtol et Kruse, 2010). Par ailleurs, l'Arctique, dont fait partie l'île Kodiak, est une région particulièrement sensible aux changements climatiques, se réchauffant à un rythme deux fois plus rapide que le reste de la planète (Yamanouchi et Takashi, 2020). Malgré ces défis, la pêche au crabe royal continue de s'intensifier dans la région nord-américaine, avec une production record de 64 298 tonnes en 2021. Ce rapport examine donc non seulement les aspects écologiques et biogéochimiques liés aux crabes royaux, mais s'attache aussi à comprendre l'impact des activités humaines et des changements climatiques sur ces populations vulnérables. 
+
+> *"La consommation en produits de la mer s'est accrue de 7 à 21 kg par an et par habitant entre 1950 et nos jours, entrainant une surexploitation massive des océans."*
+>
+>- FAO, Fishery and aquaculture statistics, 2019
+
+Il est primordial d'étudier les populations de *Paralithodes camtschaticus* tant pour l'aspect écologique (dynamique trophique, équilibre des écosystèmes, services écosystémiques, rôle fonctionnel) qu'économique.
+</div>
+
+<br>
+
+<div style="text-align: center;">
+```{r carte}
+leaflet(data = survey_data) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~Longitude, lat = ~Latitude, 
+    color = "darkred", fill = TRUE, fillColor = ~colors,  
+    radius = ~radius, #Utilisation de la colonne 'radius' pour le rayon des cercles
+    popup = ~Total_crabs
+  ) %>% 
+  addControl(
+    position = "bottomright",
+    html = '<div style="background-color: white; padding: px;">
+              <h4 style="text-align: center;">Nombre de Crabes</h4>
+              <svg height="30" width="30"><circle cx="15" cy="15" r="15" fill="darkred" opacity="1" /></svg> Élevé<br/>
+              <svg height="20" width="20"><circle cx="10" cy="10" r="10" fill="darkred" opacity="0.7" /></svg> Moyen<br/>
+              <svg height="10" width="10"><circle cx="5" cy="5" r="5" fill="darkred" opacity="0.4" /></svg> Faible<br/>
+            </div>'
+  )
+```
+</div>
+<div align="center">
+*Figure 01 : L'île Kodiak, au large de l'Alaska, abritant les populations de Paralithodes camtschaticus, carte interactive.*  
+</div>
+<br>
+
+## **Questions écologiques**
+<br>
+<div style="text-align: justify;">
+Au regard du contexte géographique, économique et écologique, nous nous demanderons :
+
+1. **Influence de la salinité et de la température sur les populations de crabes**
+  + Exploration de la corrélation entre la salinité, la température et le nombre de crabes
+  + Analyse de l'impact des facteurs abiotiques sur la dynamique populationnelle des crabes
+  + Investigation de la relation potentielle entre les facteurs abiotiques et le ratio mâle-femelle chez les crabes
+
+<br>
+
+2. **Impacts des activités de pêche sur les populations de crabes**
+  + Impact de la pêche, des perturbations par les bateaux, ou de leur combinaison sur les populations de crabes : quelle prédominance ?
+  
+<br>
+
+3. **La pêche modifie-t-elle la taille des individus ?**
+  + La pêche selectionne t-elle des tailles de crabe en particulier ?
+  + A quoi s'attend t-on si on augmente les efforts de pêches ?
+</div>
+
+<br>
+
+# **Influence de la salinité et de la température sur les populations de crabes**
+
+<br>
+
+<div style="text-align: justify;">
+Dans le cadre de notre étude sur l'impact des paramètres abiotiques sur les populations de crabes, une approche méthodique a été adoptée pour affiner nos données. Afin de parvenir à une estimation équilibrée du nombre de crabes, nous avons procédé initialement à un calcul global de leur abondance. Pour tenir compte des variations dans l'effort de piégeage entre les stations, nous avons divisé le nombre total de crabes par le nombre de pièges de la station. Cette étape, cruciale pour garantir la fiabilité de nos estimations, nous a permis d'obtenir une moyenne plus représentative du nombre de crabes par piège, indépendamment de la densité de piégeage. Les données ainsi ajustées offrent une base plus précise pour nos analyses statistiques subséquentes.
+</div>
+
+<br>
+
+```{r modification et transformation des données, results='asis'}
+
+# Sélectionner les colonnes nécessaires
+selected_data <- data_environment_crab_clean_ratio %>%
+  select(Year, ratio_total_crabs, ratio_total_female, ratio_total_male, Temperature, Salinity)
+#test de corrélation
+correlation_matrix <- cor(selected_data, use = "complete.obs")
+correlation_test <- rcorr(as.matrix(selected_data), type = "pearson")
+#mettre la matrice de corrélation en dataframe
+cor_df <- as.data.frame(correlation_test$r) %>% 
+  mutate(Feature1 = row.names(.)) %>%
+  pivot_longer(cols = -Feature1, names_to = "Feature2", values_to = "Correlation") %>%
+  mutate(Abs_Correlation = abs(Correlation))
+#calculer les p-value
+pval_df <- as.data.frame(correlation_test$P) %>% 
+  mutate(Feature1 = row.names(.)) %>%
+  pivot_longer(cols = -Feature1, names_to = "Feature2", values_to = "P_Value")
+#print(pval_df) #ne pas afficher
+#premier tableau
+correlation_results <- left_join(cor_df, pval_df, by = c("Feature1", "Feature2"))
+#simplification du tableau
+cor_matrix <- correlation_results %>% 
+  pivot_wider(names_from = Feature2, values_from = Correlation, id_cols = Feature1) %>%
+  as.data.frame()
+#nom des colonnes et des lignes"
+colnames(cor_matrix) <- c(" ", "Année", "Crabes", "Femelles", "Mâles", "Température", "Salinité")
+cor_matrix <- cor_matrix[, -1]
+rownames(cor_matrix) <- c("Année", "Crabes", "Femelles", "Mâles", "Température", "Salinité")
+```
+
+```{r graphique corr, fig.width=8, fig.height=3.5}
+ggcorrplot(correlation_matrix, 
+           method = "square", 
+           type = "full", 
+           hc.order = TRUE, 
+           outline.color = "white",
+           ggtheme = theme_minimal(),
+           colors = c("#6D9EC1", "white", "#E46726"),
+           lab = TRUE, 
+           lab_size = 3.5,
+           title = "Corrélation entre la salinité, la température et le nombre de crabes",
+           tl.cex = 8,
+           tl.col = "black",
+           tl.srt = 40,
+           legend.title = "Coefficient de Corrélation")
+```
+<div align="center">
+*Figure 02 : Matrice de corrélation entre la salinité, la température et le nombre de crabes (Total, Mâles et Femelles). Les corrélations sont significatives (test de Pearson, p-value < 0.01). Au regard des valeurs de corrélations, la température et la salinité n’influencent pas le nombre de crabe, mâle ou femelle. Notons une corrélation faiblement négative entre la salinité et la température (-0.25).*
+</div>
+
+<div style="text-align: justify;">
+Notre matrice de corrélation (Figure 02) indique une corrélation positive mais faible entre la salinité et la température et le nombre de crabes, avec des coefficients de corrélation de 0.06 pour la salinité et de 0.05 pour la température (Figure 02). Bien que statistiquement significatives (p-value < 0.01 pour la salinité et la température), ces valeurs suggèrent que les influences de la salinité et de la température sur la population totale des crabes sont mineures, voire inexistantes. Par ailleurs, le ratio mâle-femelle semble indépendant de ces facteurs abiotiques, avec des coefficients de corrélation proches de 0.05 pour la température et la salinité chez les femelles, et de 0.03 pour la température et 0.06 pour la salinité chez les mâles (Figure 02). Ces nuances indiquent que d'autres facteurs doivent être examinés pour comprendre pleinement les dynamiques des populations de crabes sur l'île Kodiak.
+</div>
+
+<br>
+
+## **Interaction entre la température et la salinité sur l'île Kodiak**
+
+<br>
+
+<div style="text-align: justify;">
+Dans les contextes océaniques, les interactions entre la salinité et la température à différentes profondeurs sont complexes et multifactorielles. De plus, il convient de noter que ces interactions présentent des différences significatives en fonction des strates échantillonnées au sein des océans. Cependant, une étude récente a révélé qu'en certaines régions, une corrélation négative existe entre la température et la salinité. Cette interaction s'avère indirecte, car la température influe sur la densité de l'eau, laquelle à son tour affecte la salinité (Ran et al., 2023). Il est donc pertinent, dans un premier temps, de se focaliser sur la relation entre la salinité et la température dans les eaux entourant l'île Kodiak.
+</div>
+
+<br>
+
+```{r plot salinité température et test stat associé, fig.width=5, fig.height=2}
+ggplot(data_environment_crab_clean_summary, aes(x = Temperature, y = Salinity)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "Relation entre la salinité et la température",
+       x = "Température",
+       y = "Salinité") + 
+  theme(plot.title = element_text(size = 12))
+lm_temp_sal <- lm(Temperature ~ Salinity, data = data_environment_crab_clean_summary)
+#summary(lm_temp_sal) #ne pas afficher
+#plot(lm_temp_sal) #ne pas afficher
+```
+<div align="center">
+*Figure 03 : Relation entre la salinité et la température (test F, p-value = 0.16, R² = 0.09398). Statistiquement, la température et la salinité ne sont pas corrélés.*
+</div>
+
+<br>
+
+<div style="text-align: justify;">
+La relation entre la salinité et la température se révèle non significative d'un point de vue statistique (test F, p-value > 0,05, R² = 0,04) (Figure 03). Les données dont nous disposons ne permettent pas d'établir de manière statistiquement significative un lien entre les variations de température et les niveaux de salinité. Il serait judicieux d'approfondir notre échantillonnage en le adaptant aux strates océaniques, en tenant compte du contexte de changement global et des altérations des conditions abiotiques à l'échelle planétaire, afin d'explorer toute interaction éventuelle entre ces deux paramètres sur l'île Kodiak.
+
+Le modèle testé est le suivant :
+$$T_{i,j}= \mu + \beta S_{i,j} + E_{i,j}$$
+
+avec i l'année, j le mois, $T_{i,j}$ la température (à l'année i et au mois j), $S_{i,j}$ la salinité, et les $E_{i,j}$ indépendants tels que $E_{i,l} \sim \mathcal{N}(\mu,\,\sigma^{2})$. 
+
+</div>
+
+<br>
+
+## **Analyse de l'impact des facteurs abiotiques sur la dynamique populationnelle des crabes royaux**
+
+<br>
+
+<div style="text-align: justify;">
+Les crabes sont influencés à la fois par les conditions terrestres et marines. La température joue un rôle prépondérant dans la détermination du sexe des individus, comme l'ont souligné Hidir et al. (2022), tandis que les variations de salinité peuvent affecter leur croissance et leur biomasse, selon Mia et Shah (2010). Ces facteurs abiotiques, en modulant les pressions sélectives, peuvent influencer de manière significative les taux de survie et de reproduction, comme le démontrent les travaux de Stueckle et al. (2009) et Amin-Safwan et al. (2019). Ces interactions écologiques complexes entre température, salinité et biologie des crabes constituent la première partie de notre analyse, et sont déterminantes pour comprendre les schémas démographiques de ces organismes dans leur habitat.
+</div>
+
+<br>
+
+```{r Salinité - nombre total de Crabes, fig.width=10, fig.height=3}
+#Salinité - nombre total de Crabes
+plot_sal_ratio <- ggplot(data_environment_crab_clean_summary, aes(x = Salinity, y = ratio_total_crabs)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "Relation entre la salinité et le nombre total de crabes",
+       x = "Salinité",
+       y = "Nombre total de Crabes") +
+  theme(plot.title = element_text(size = 10))
+#Tests statistiques associés
+lm_sal_crab <- lm(Salinity ~ ratio_total_crabs, data = data_environment_crab_clean_summary)
+#plot(lm_sal_crab) #ne pas afficher
+#summary(lm_sal_crab) #ne pas afficher
+
+#Température - nombre total de Crabes
+plot_temp_ratio <- ggplot(data_environment_crab_clean_summary, aes(x = Temperature, y = ratio_total_crabs)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "Relation entre la température et le nombre total de crabes",
+       x = "Température",
+       y = "Nombre total de Crabes") + 
+  theme(plot.title = element_text(size = 10))
+#Test statistique et vérification des conditions
+lm_temp_crab <- lm(Temperature ~ ratio_total_crabs, data = data_environment_crab_clean_summary)
+#plot(lm_temp_crab) #ne pas afficher 
+#Test statistique et résumé du test effectué préalablement
+#summary(lm_temp_crab) #ne pas afficher
+#Aligner les graphes
+grid.arrange(plot_sal_ratio, plot_temp_ratio, ncol = 2)
+```
+<div align="center">
+*Figure 04 : Le premier graphique montre la relation entre la salinité et le nombre de crabes (test F, p-value = 0.5005, R² = 0.023). Statistiquement, la salinité et le nombre de crabes ne sont pas corrélés. Le deuxième graphique (droite) montre la relation entre la température et le nombre de crabes (test F, p-value = 0.8609, R² = 0.001573). Statistiquement, la température et le nombre de crabes ne sont pas corrélés.*
+</div>
+
+<br>
+
+<div style="text-align: justify;">
+On teste les modèles suivants : 
+
+$$N_{i,l} = \mu + \beta S_i + E_{i,l}$$
+
+avec avec i l'année, l la station, $S_i = \sum \limits_{\underset{}{j}} S_{i,j}$ la salinité moyenne sur l'année et $N_{i,l}$ le nombre total de crabes par pots (l'année i dans la station l).
+
+$$N_{i,l} = \mu + \beta T_i + E_{i,l}$$
+avec avec i l'année, l la station, $T_i = \sum \limits_{\underset{}{j}} T_{i,j}$ la température moyenne sur l'année et $N_{i,l}$ le nombre total de crabes par pots.
+
+La figure 04  illustre une découverte surprenante : l'absence de lien direct entre les facteurs abiotiques et la densité des populations de crabes royaux sur l'île Kodiak. Dans leur étude de 2010, Bechtol et Kruse ont mis en évidence les limites de leur modèle prédictif basé sur des paramètres abiotiques, y compris la couverture nuageuse, soulignant son manque de précision pour anticiper les variations des populations de crabes. Dans le cadre de notre recherche, cette tendance se confirme : il apparaît que l'abondance des crabes royaux n'est pas directement influencée par des facteurs abiotiques spécifiques. Cette observation suggère la nécessité de mener des échantillonnages plus systématiques pour une analyse plus approfondie. En outre, il est à noter que certaines conditions statistiques ne sont pas entièrement satisfaites dans notre étude actuelle (homoscédasticité des résidus). Pour pallier ces lacunes, nous envisageons l'application d'un modèle mixte, incorporant des effets aléatoires (comme l'année et la station d'échantillonnage), afin d'affiner notre compréhension de la dynamique populationnelle des crabes royaux dans cet écosystème selon la température et la salinité.
+
+<br>
+
+Au cœur de notre exploration statistique, nous avons postulé que la distribution des crabes royaux est influencée par deux variables environnementales principales : la température et la salinité. Afin de modéliser la dépendance de l'abondance de crabes sur ces facteurs abiotiques, tout en intégrant les fluctuations intrinsèques à chaque année, nous avons recouru à un modèle linéaire mixte. La formulation mathématique de notre modèle s'énonce ainsi : 
+
+$$N_{i,l} = \mu + \beta T_i + \alpha S_i  + U_i + E_{i,l}$$
+
+avec i l'année, l la station, $T_i = \sum \limits_{\underset{}{j=1}}^{12} T_{i,j}$ la température moyenne sur l'année,  $S_i = \sum \limits_{\underset{}{j=1}}^{12} S_{i,j}$ la salinité moyenne sur l'année, $N_{i,l}$ le nombre total de crabes par pots, les $E_{i,l}$ et $U_i$ indépendants et tels que $E_{i,l} \sim \mathcal{N}(\mu,\,\sigma^{2})$, $U_i\sim \mathcal{N}(\mu,\,\sigma_U^{2})$.
+
+</div>
+```{r modèle mixte aléatoire année}
+#Modèle aléatoire en incluant l'année sur les données
+mixed_model_year <- lmer(ratio_total_crabs ~ Temperature + Salinity + (1|Year), data = data_environment_crab_clean_ratio)
+#Vérification de la normalité de l'effet aléatoire
+effets_aleatoires <- ranef(mixed_model_year)$Year
+#Graphique
+#ggplot(effets_aleatoires, aes(x = rownames(effets_aleatoires), y = `(Intercept)`)) +
+#  geom_point() +
+#  theme_minimal() +
+#  labs(x = "Année", y = "Effet aléatoire", title = "Distribution des Effets Aléatoires pour l'Année") #ne pas afficher
+#Test statistique
+#shapiro.test(effets_aleatoires$`(Intercept)`) #vérifier la normalité de l'effet aléatoire
+#Résumé
+#summary(mixed_model_year)
+```
+<div style="text-align: justify;">
+
+<br>
+
+Dans notre modèle linéaire mixte visant à évaluer l'impact de la température et de la salinité sur l'abondance des crabes royaux, en contrôlant les variations annuelles comme effets aléatoires, nous avons rencontré des résultats statistiques qui soulèvent des questions plutôt que de fournir des réponses claires.
+La p-value du test de Shapiro-Wilk suggère que les effets aléatoires ne suivent pas une loi normale (p-value = 0.6162). Les coefficients pour la température et la salinité, bien que positifs, ne sont pas statistiquement significatifs (t-value = 0.098 pour la température et t-value = 0.113 pour la salinité), suggérant une faible ou inexistante influence linéaire de ces facteurs sur le nombre de crabes.
+
+<br>
+
+Pour aborder avec une rigueur scientifique la complexité inhérente à notre système d'étude, un ajustement méthodologique s'avère nécessaire. Dans cette itération, l'identifiant de la station sera considéré comme un effet aléatoire. Cette approche vise à saisir plus finement les nuances et les variations attribuables aux spécificités locales de chaque station.
+
+Le modèle testé est le suivant :
+$$N_{i,l} = \mu + \beta T_i + \alpha S_i  + V_l + E_{i,l}$$
+
+avec les $E_{i,l}$ et les $V_l$ indépendants et tels que $E_{i,l} \sim \mathcal{N}(\mu,\,\sigma^{2})$, $V_l \sim \mathcal{N}(\mu,\,\sigma_V^{2})$.
+</div>
+
+```{r modèle mixte aléatoire station}
+mixed_model_station_ratio <- lmer(ratio_total_crabs ~ Salinity + Temperature + (1|Station_Identifier), data = data_environment_crab_clean_ratio)
+#summary(mixed_model_station_ratio) #ne pas afficher
+#plot(residuals(mixed_model_salinity_temp_station)) #ne pas afficher
+effets_aleatoires_SI_ratio <- ranef(mixed_model_station_ratio)$Station_Identifier
+#hist(effets_aleatoires_SI_ratio) #ne pas afficher
+#Comparaison des deux modèles
+aic_mixed_model_station_ratio<- AIC(mixed_model_station_ratio)
+aic_mixed_model_year<- AIC(mixed_model_year)
+```
+
+<br>
+<div style="text-align: justify;">
+En incorporant les dimensions de salinité et de température dans notre modèle mixte, nous avons cherché à dévoiler leur influence respective sur la distribution totale des crabes royaux, tout en contrôlant les variations intrinsèques à chaque station de mesure identifiée. Le modèle semble mettre en évidence une relation positive et statistiquement significative entre la salinité et la température avec l'abondance des crabes, révélée par des valeurs de t élevées (8.268 pour la salinité et 6.551 pour la température). Ce constat est appuyé par un critère de convergence REML de 133720.4 et un AIC de 133730.4 (qui est inférieur à l'AIC du premier modèle 135978), témoignant d'un ajustement plus robuste. Néanmoins, les effets aléatoires attribués aux stations révèlent une variation non négligeable, comme en témoigne la variance de l'intercept pour chaque station. Les résidus du modèle, bien que centrés, indiquent par leur distribution des écarts conséquents pour certains points, suggérant la présence potentielle de facteurs non modélisés ou de valeurs aberrantes.
+Nos analyses confirment que la salinité et la température ont une très faible influence sur l'abondance des crabes, malgré des résultats positifs et significatifs, avec une précision accrue par l'inclusion des variations stationnelles comme composante aléatoire.
+</div>
+
+<br>
+
+```{r graphique de prédictions, fig.width=8, fig.height=4}
+#Création d'un tableau réunissant toutes les possibilité de salinité et de température, les deux facteurs étant non corrélé selon nos données
+salinity_range <- seq(min(data_environment_crab_clean_ratio$Salinity), max(data_environment_crab_clean_ratio$Salinity), length.out = 100)
+temperature_range <- seq(min(data_environment_crab_clean_ratio$Temperature), max(data_environment_crab_clean_ratio$Temperature), length.out = 100)
+#Création d'un dataframe avec toutes les combinaisons de salinity et temperature
+simulated_data <- expand.grid(Salinity = salinity_range, Temperature = temperature_range)
+#Prédire l'augmentation du nombre de crabe pour chaque combinaison sur le total de crabe
+simulated_data$Predicted_Crabs <- predict(mixed_model_station_ratio, newdata = simulated_data, re.form = NA)
+#Graphique
+ggplot(simulated_data, aes(x = Salinity, y = Temperature, fill = Predicted_Crabs)) +
+  geom_tile() +
+  scale_fill_gradientn(colours = paletteer_c("ggthemes::Temperature Diverging", 30)) +
+  labs(
+    title = "Variation du nombre de Crabes en fonction de la salinité et de la température",
+    x = "Salinité",
+    y = "Température",
+    fill = "Variation du nombre de crabes"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10))
+```
+<div align="center">
+*Figure 05 : Modélisation de l'influence de la salinité et de la température sur la population de crabes : une modification minime par rapport aux stocks initiaux*
+</div>
+
+<br>
+
+<div style="text-align: justify;">
+Notre modèle statistique révèle des fluctuations subtiles dans les effectifs des crabes royaux de l'île Kodiak engendrées par la température et la salinité (Figure 05). Toutefois, l'amplitude de ces variations est marginale au regard des densités initiales observées sur les sites d'étude. Les paramètres abiotiques, bien que présents, semblent exercer une influence limitée sur la dynamique démographique globale de l'espèce. Il s'avère pertinent d'élargir notre spectre d'analyse à d'autres variables, notamment le ratio mâle-femelle, afin de discerner si les variations abiotiques agissent sur la structure de la population et son potentiel reproducteur, ou si d'autres agents (anthropiques ou écologiques) prédominent.
+</div>
+
+<br>
+
+## **Influence des facteurs abiotiques sur le ratio mâle-femelle chez les crabes royaux : une analyse statistique**
+
+<br>
+
+<div style="text-align: justify;">
+Comme l'ont mentionné Bechtol et Kruse en 2010, le sexe-ratio est important pour comprendre la dynamique populationelle des crabes royaux. Ce sexe ratio est primordial pour le maintien de la population, ou son développement. Un ratio mâle-femelle trop déséquilibré pourrait engendrer un déclin de la population. Plusieurs agents abiotiques pourraient influencer le ratio mâle-femelle. Par exemple, une étude a montré que les changements de température peuvent influencer la détermination du sexe pendant l'incubation des œufs, la période de croissance des larves et la production de juvéniles chez le crabe de boue pourpre, *Scylla tranquebarica* (Hidir et al, 2022). Néanmoins d'autres agents écologiques pourraient influencer le sexe-ratio. 
+</div>
+
+<br>
+
+```{r ratio male femelle année, fig.width=5, fig.height=3}
+#Création d'une colonne ratio male femelle
+data_environment_crab_clean_summary$ratio_male_female <- data_environment_crab_clean_summary$ratio_total_male/data_environment_crab_clean_summary$ratio_total_female
+#Graphique
+ggplot(data_environment_crab_clean_summary) +
+  aes(x = Year, y = ratio_male_female) +
+  geom_line(colour = "#8F0E0E") +
+  labs(
+    x = "Années",
+    y = "Ratio mâle-femelle",
+    title = "Evolution du ratio mâle-femelle au cours des années (10 ans)"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10))
+#Modèle linéaire année ratio male femelle
+model_sexratio_year <- lm(ratio_male_female ~ Year, data = data_environment_crab_clean_summary)
+#summary(model_sexratio_year)
+#plot(model_sexratio_year)
+```
+<div align="center">
+*Figure 06 : Evolution du ratio mâle-femelle au cours de dix ans sur l'île Kodiak (test F, p-value < 0.01)*
+</div>
+
+<br>
+<div style="text-align: justify;">
+Il existe une relation statistiquement significative entre l'année et le ratio mâle-femelle chez les crabes royaux de l'île Kodiak (Figure 06, test F, p-value = 1.106e-05). Au fil du temps, nous observons une diminution du ratio mâle-femelle, ce qui entraîne une augmentation du nombre de femelles et une réduction du nombre de mâles. Cette tendance pourrait avoir d'importantes répercussions sur la dynamique des populations de crabes royaux, influençant les réseaux trophiques, les comportements de reproduction, et pouvant même introduire de la compétition interspécifique si la rareté croissante des mâles persiste. Dans cette optique, une analyse statistique sera entreprise pour évaluer si cette modification du ratio mâle-femelle est potentiellement liée à des facteurs abiotiques tels que la température et la salinité.
+</div>
+
+<br>
+
+```{r graphique ratio temp + salinité et modèle, fig.width=10, fig.height=3}
+#graphique pour la température et le ratio male femelle
+plot_temp_rmf <- ggplot(data_environment_crab_clean_summary) +
+  aes(x = Temperature, y = ratio_male_female) +
+  geom_line(colour = "#8F0E0E") +
+  labs(
+    x = "Température",
+    y = "Ratio mâle-femelle",
+    title = "Evolution du ratio mâle-femelle selon la température"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10))
+#graphique pour la salinité et le ratio male femelle
+plot_sal_rmf <- ggplot(data_environment_crab_clean_summary) +
+  aes(x = Salinity, y = ratio_male_female) +
+  geom_line(colour = "#8F0E0E") +
+  labs(
+    x = "Salinité",
+    y = "Ratio mâle-femelle",
+    title = "Evolution du ratio mâle-femelle selon la salinité"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10))
+
+#Modélisation statistique
+model_sexratio_temp_sal <- lm(ratio_male_female ~ Salinity + Temperature, data = data_environment_crab_clean_summary)
+#plot(model_sexratio_temp_sal)
+#summary(model_sexratio_temp_sal)
+grid.arrange(plot_temp_rmf, plot_sal_rmf, ncol = 2)
+```
+<div align="center">
+*Figure 07 : Évolution du ratio mâle-femelle en fonction de la température (à gauche, test F, p-value = 0,397) et de la salinité (à droite, test F, p-value = 0,786). Il est clairement observé que la température et la salinité n'exercent aucune influence sur le ratio des sexes, et aucune corrélation significative n'a été établie entre ces facteurs et le sexe ratio.*
+</div>
+
+<br>
+
+On teste le modèle suivant :
+
+$$R_{i,l} = \mu + \beta T_i + \alpha S_i + E_{i,l}$$ 
+avec $R_{i,l}$ le ratio (nombre de mâles)/(nombre de femelles) à l'année i et dans la station l.
+
+
+<div style="text-align: justify;">
+Les facteurs abiotiques, tels que la température et la salinité, ne présentent pas de corrélation significative avec le ratio mâle-femelle (p-value = 0,786 pour la salinité et 0,397 pour la température). Bien que la température et la salinité ne semblent pas exercer d'influence sur le ratio des sexes, celui-ci continue de diminuer d'année en année. Il semblerait qu'un autre paramètre, encore à déterminer, favorise la présence des femelles. Notre attention se portera donc sur l'impact potentiel de la pêche, un facteur qui pourrait jouer un rôle non négligeable dans la variation du ratio des sexes.
+</div>
+
+<br>
+
+# **Impacts des activités de pêche sur les populations de crabes**
+
+<br>
+
+```{r chargement des données nécessaires pour la partie}
+catch_data <- read.table("catch", header = FALSE, col.names = c("Year", "Fishing_District", "Total_Catch_Count", "Total_Catch_kg"))
+fleet_data <- read.table("fleet", header = FALSE, col.names = c("Year", "Number_of_Vessels", "Number_of_Crab_Caught", "Total_Weight_kg", "Total_Number_of_PotLifts", "Wholesale_Price_per_Pound"))
+#Transformation des données
+columns_to_average <- c('PreRecruit4_Crab', 'PreRecruit3_Crab', 'PreRecruit2_Crab', 
+                        'PreRecruit1_Crab', 'Recruit_Males', 'PostRecruit_Males', 
+                        'Juvenile_Females', 'Adult_Females', 'Total_crabs', 
+                        'Total_male', 'Total_female')
+#Transformation d'un tableau de données pour chaque année 
+average_values_per_year <- data_environment_crab_clean_ratio %>%
+  group_by(Year) %>%
+  summarise(across(all_of(columns_to_average), sum, na.rm = TRUE), .groups = "drop")
+average_values_per_district <- data_environment_crab_clean_ratio %>%
+  group_by(Year, Fishing_District) %>%
+  summarise(across(all_of(columns_to_average), sum, na.rm = TRUE), .groups = "drop")
+#Filtrage des données pour la combinaison future
+average_values_per_district_year <- average_values_per_year %>%
+  filter(Year != 83)
+#transformation des données catch
+catch_clean_filtered <- catch_data %>%
+  filter(Year >= 73, Year <= 83)
+catch_clean_filtered_district <- catch_clean_filtered %>%
+  filter(!(Year == 78 & Fishing_District %in% c(1, 4)))
+catch_clean_summarised <- catch_clean_filtered %>%
+  group_by(Year) %>%
+  summarise(
+    Total_Catch_Count = sum(Total_Catch_Count, na.rm = TRUE),
+    Total_Catch_kg = sum(Total_Catch_kg, na.rm = TRUE))
+#Transformation des données fleet
+fleet_clean_filtered <- fleet_data %>%
+  filter(Year >= 73, Year <= 82)
+#fusion de toutes les données dans un seul tableau
+combined_data_1 <- merge(average_values_per_district_year, catch_clean_summarised, by = "Year")
+combined_data <- merge(combined_data_1, fleet_clean_filtered, by = "Year")
+catch_district_crabs <- merge(catch_clean_filtered_district, average_values_per_district, by = "Fishing_District")
+#Supprimer les colonnes redondantes
+combined_data$Number_of_Crab_Caught = NULL
+combined_data$Total_Weight_kg = NULL
+#Faire une colonne Prerecruit_Crabs qui est la somme de tous les prerecruits_crabs
+combined_data <- combined_data %>%
+  mutate(Prerecruit_Crabs = PreRecruit4_Crab + PreRecruit3_Crab + PreRecruit2_Crab + PreRecruit1_Crab)
+#Supprimer les données inutiles
+combined_data$PreRecruit4_Crab = NULL
+combined_data$PreRecruit3_Crab = NULL
+combined_data$PreRecruit2_Crab = NULL
+combined_data$PreRecruit1_Crab = NULL
+combined_data$Total_Catch_kg = NULL
+combined_data$Wholesale_Price_per_Pound = NULL
+combined_data$ratio_male_femelle = combined_data$Total_male / combined_data$Total_female
+```
+<div style="text-align: justify;">
+L'objectif de cette partie est d'examiner l'impact des activités de pêche sur les populations de crabes. La méthodologie repose sur la collecte, la transformation et l'analyse de données provenant de deux sources principales : les données de capture et les données de la flotte de pêche.
+</div>
+
+<br>
+
+## **Evolution de la pêche autour de l'île Kodiak**
+
+<br>
+
+```{r création des graphiques, fig.width=5, fig.height=3}
+#Evolution du nombre de bateaux de pêche au cours de 10 ans
+ggplot(combined_data) +
+ aes(x = Year, y = Number_of_Vessels) +
+ geom_line(colour = "#EF662D") +
+ labs(x = "Année", 
+ y = "Nombre de vaisseaux", title = "Evolution du nombre de bateaux de pêche au cours de 10 ans", 
+ subtitle = "De 1973 à 1982") +
+ theme_minimal() + 
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 8))
+
+model_fleet_year <- lm(Number_of_Vessels ~ Year, data = combined_data)
+#plot(model_fleet_year)
+#summary(model_fleet_year)
+```
+<div align="center">
+*Figure 08 : Évolution du nombre de bateaux de pêche au cours de diw ans (1973 - 1982). Le nombre de bateaux de pêche augmente chaque année malgré une baisse notable autour de 1978 (test F, p-value = 0.00391, R² = 0.6259).*
+</div>
+
+<br>
+
+<div style="text-align: justify;">
+De 1973 à 1982, le nombre de bateaux de pêche a connu une augmentation significative, avec une moyenne d'environ 15 bateaux supplémentaires par an (p-value = 0.00391). Cette croissance reflète une politique active d'exploitation des ressources marines autour de l'île Kodiak. Les crabes royaux, en particulier, subissent de manière intense cette pression anthropique, et il est probable que leur dynamique populationnelle soit affectée en conséquence. Nous allons examiner en détail l'ampleur et les implications de cet impact.
+</div>
+
+<br>
+
+## **Impacts des activités de pêche sur les populations de crabes royaux de l'île Kodiak**
+
+<br>
+
+<div style="text-align: justify;">
+Dans le cadre de notre étude visant à déterminer les variables influençant les populations de crabes, nous nous proposons de développer une matrice de corrélation, suivie de l'exécution d'analyses graphiques. Ces étapes seront essentielles pour visualiser et comprendre les relations potentielles entre diverses variables. Ultérieurement, un modèle statistique rigoureux sera appliqué afin de valider les conclusions tirées de nos analyses préliminaires. Cette approche méthodologique permettra de délimiter avec précision les facteurs impactant significativement les populations de crabes.
+</div>
+
+<br>
+
+```{r matrice de corrélation, fig.width=6, fig.height=4}
+cor_matrix <- cor(combined_data[, c('Total_crabs', 'Total_male', 'Total_female', 'ratio_male_femelle', 'Number_of_Vessels', 'Total_Number_of_PotLifts', 'Total_Catch_Count')])
+corr_test <- rcorr(as.matrix(combined_data), type = "pearson")
+#mettre la matrice de corrélation en dataframe
+corr_df <- as.data.frame(corr_test$r) %>% 
+  mutate(Feature1 = row.names(.)) %>%
+  pivot_longer(cols = -Feature1, names_to = "Feature2", values_to = "Correlation") %>%
+  mutate(Abs_Correlation = abs(Correlation))
+#calculer les p-value
+pval_df_corr <- as.data.frame(corr_test$P) %>% 
+  mutate(Feature1 = row.names(.)) %>%
+  pivot_longer(cols = -Feature1, names_to = "Feature2", values_to = "P_Value")
+corrplot(cor_matrix, method = "square", 
+         title = "Matrice de Corrélation",
+         mar = c(0,0,2,0),
+         cex.main = 1,
+         tl.col = "black", tl.srt = 20, tl.cex = 0.6,  
+         col = colorRampPalette(c("darkred", "white", "darkblue"))(200)) 
+```
+<div align="center">
+*Figure 09 : Matrice de corrélation entre les données de pêche et les paramètres démographiques des populations de crabes. Une corrélation notable est observée entre le nombre de pots levés et le nombre total de crabes, en particulier les mâles, avec un coefficient de corrélation de -0,6712633 (p-value = 3,356947e-02), indiquant une relation significative entre l'intensité de la pêche et la population des crabes mâles. Le nombre de pots levés impact fortement négativement le ratio mâle femelle (p-value = 2.238960e-02).*
+</div>
+
+<br>
+
+<div style="text-align: justify;">
+L'analyse de la matrice met en évidence une corrélation significativement négative entre le nombre de pots levés et la population de crabes (p-valeur = 0,003). De plus, il est à noter une corrélation négative entre le ratio mâle-femelle et le nombre de pots levés (p-valeur = 0,002). Il est plausible que cette dernière variable soit en partie responsable de la diminution du ratio observée à la Figure 06. En modifiant ce ratio, notamment en réduisant le nombre de mâles, la pêche exerce une influence écologique substantielle, impactant la structure de la population, les dynamiques internes, le réseau trophique, ainsi que les interactions de compétition au sein du groupe.
+</div>
+
+<br>
+```{r graphique, fig.width=12, fig.height=3}
+#Évolution du Nombre de Crabes (Total, Mâle et Femelle) au Cours de 10 ans
+plot_crab_year <- ggplot(combined_data, aes(x = Year)) +
+  geom_line(aes(y = Total_female, color = "Crabes Femelles")) +
+  geom_line(aes(y = Total_male , color = "Crabes Mâles")) +
+  geom_line(aes(y = Total_crabs , color = "Total Crabes")) +
+  scale_color_manual(values = c("Crabes Femelles" = "salmon", 
+                                "Crabes Mâles" = "darkred", 
+                                "Total Crabes" = "lightblue3")) +
+  labs(title = "Évolution du Nombre de Crabes (Total, Mâle et Femelle) au Cours de 10 ans",
+       subtitle = "De 1973 à 1982",
+       x = "Année",
+       y = "Nombre de Crabes",
+       color = "Légende") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 8))
+model_crab_year <- lm(Year ~ Total_female + Total_male + Total_crabs, data = combined_data)
+#plot(model_crab_year)
+#summary(model_crab_year)
+
+plot_crabs_pots <- ggplot(combined_data, aes(x = Total_Number_of_PotLifts)) +
+  geom_line(aes(y = Total_female, color = "Crabes Femelles")) +
+  geom_line(aes(y = Total_male , color = "Crabes Mâles")) +
+  geom_line(aes(y = Total_crabs , color = "Total Crabes")) +
+  scale_color_manual(values = c("Crabes Femelles" = "salmon", 
+                                "Crabes Mâles" = "darkred", 
+                                "Total Crabes" = "lightblue3")) +
+  labs(title = "Évolution du Nombre de Crabes (Total, Mâle et Femelle) selon le nombre de Pots Lift",
+       subtitle = "De 1973 à 1982",
+       x = "Nombre de Pots lift",
+       y = "Nombre de Crabes",
+       color = "Légende") +
+  theme_minimal() + 
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 8))
+model_crabs_pots <- lm(Total_Number_of_PotLifts ~ Total_female + Total_male + Total_crabs, data = combined_data)
+#plot(model_crabs_pots)
+#summary(model_crabs_pots)
+model_total_male <- lm(Total_Number_of_PotLifts ~ Total_male, data = combined_data)
+#summary(model_total_male)
+grid.arrange(plot_crab_year, plot_crabs_pots, ncol = 2)
+```
+<div align="center">
+*Figure 10 : Le premier graphique (à gauche) illustre l'évolution du nombre de crabes de 1973 à 1982. On observe une diminution significative du nombre de crabes au cours de cette décennie (test F, p-valeur = 0,04236). Le deuxième graphique présente l'évolution du nombre de crabes en fonction du nombre de pots levés sur la même période (1973 à 1982). On constate que le nombre de crabes diminue avec l'augmentation du nombre de pots levés, bien que cette relation ne soit pas statistiquement significative (test F, p-valeur = 0,09131). Cependant, il est à noter que les mâles sont particulièrement affectés par l'augmentation du nombre de pots levés, avec une diminution significative de leur nombre à mesure que le nombre de pots levés augmente (test F, p-valeur = 0,03357).*
+</div>
+
+Les modèles testés sont les suivants :
+
+$$N_{i,l} = \mu + \beta L_{i} + E_{i,l}$$ 
+
+et
+
+$$M_{i,l} = \mu + \beta L_{i} + E_{i,l}$$
+
+avec $M_{i,l}$ le nombre de mâles (rapporté au nombre de pots posés par les scientifiques) et $L_{i}$ le nombre de "pots-lifts" (levées de pièges par les pêcheurs).
+
+
+<br>
+
+<div style="text-align: justify;">
+Entre 1973 et 1982, une diminution significative du nombre de crabes a été constatée (p-value = 0,04236). À l'examen de la figure 08, il apparaît que l'activité de pêche est corrélée à une réduction du nombre de crabes. Il est particulièrement remarquable que ce soit le nombre de pots levés qui exerce une influence marquée sur les populations de crabes royaux, avec une incidence accrue sur les mâles. Cette perturbation induit un changement dans le ratio des sexes et entraîne des conséquences notables sur la structure démographique des populations ou le comportement reproducteur comme le mentionne l'étude de Goshima et al en 2000. Notre hypothèse est que les mâles, généralement plus grands, seraient plus susceptibles d'être capturés par ces pièges. En outre, il est plausible qu'un comportement spécifique des mâles, qui les conduit à s'aventurer plus loin des côtes, les rende également plus vulnérables à la pêche.
+</div>
+
+<br>
+
+## **Impact de la pêche intensive de l'île Kodiak sur le sexe ratio des crabes royaux**
+
+<div style="text-align: justify;">
+La modification du ratio entre les sexes constitue une transformation démographique majeure qui influence profondément la dynamique de la population des crabes royaux. Cette modification engendre des répercussions sur les interactions de compétition, les comportements sexuels, ainsi que la quantité d'œufs produits (Goshima et al., 2000). La variation du ratio entre les sexes altère la valeur sélective de l'espèce, et si la pression de la pêche continue de s'intensifier sans permettre au ratio entre les sexes de se rétablir, cela pourrait éventuellement conduire au déclin, voire à l'extinction de l'espèce.
+</div>
+
+<br>
+
+```{r sex ratio, fig.width=5, fig.height=3}
+#Évolution du ratio mâle femelle selon le nombre de Pots Lift
+ggplot(combined_data, aes(x = Total_Number_of_PotLifts)) +
+  geom_line(aes(y = ratio_male_femelle, color = "Ratio mâle femelle")) +
+  scale_color_manual(values = c("Ratio mâle femelle" = "salmon")) +
+  labs(title = "Évolution du ratio mâle femelle selon le nombre de Pots Lift",
+       subtitle = "De 1973 à 1982",
+       x = "Nombre de Pots Lift",
+       y = "Ratio mâle femelle",
+       color = "Légende") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 8))
+
+model_ratio_m_f <- lm(ratio_male_femelle ~ Total_Number_of_PotLifts, data = combined_data)
+#plot(model_ratio_m_f)
+#summary(model_ratio_m_f)
+```
+<div align="center">
+*Figure 11 : Évolution du ratio mâles/femelles selon le nombre de pots levés. Le nombre de pots levés diminue significativement le sexe ratio (test F, p-value = 0.02239, R² = 0.499).*
+</div>
+
+<br>
+
+Le modèle testé est le suivant :
+
+$$R_{i,l} = \mu + \beta L_{i} + E_{i,l}$$
+avec $L_{i}$ le nombre de "pot-lifts" (levées de pièges) lors de l'année i.
+
+
+<div style="text-align: justify;">
+Pour chaque augmentation unitaire dans le nombre de levées de pots, il est observé une diminution du ratio mâles/femelles des crabes royaux, calculée à 4.821e-06. La valeur p correspondante, évaluée à 0.02239<0.05, indique que cette relation est statistiquement significative.
+Le coefficient de détermination, noté R-carré, de ce modèle atteint 0.499, indiquant que près de 50% de la variation du sex-ratio des crabes royaux peut être expliquée par les variations dans le nombre total de levées de pots. Cette constatation souligne l'importance de cette corrélation dans la compréhension de la dynamique démographique de l'espèce.
+Sur le plan écologique, cette corrélation négative et statistiquement significative entre le nombre de levées de pots et le sex-ratio des crabes royaux sur l'île Kodiak revêt une grande importance. Elle suggère que des augmentations dans le nombre de levées de pots pourraient entraîner une diminution du ratio mâles/femelles au sein de la population de crabes royaux. Une telle modification du sex-ratio peut avoir des répercussions écologiques importantes, notamment en perturbant les dynamiques de reproduction et en altérant la compétition au sein de l'espèce. Si cette tendance persiste sans rééquilibrage du sex-ratio, elle pourrait mettre en péril la viabilité à long terme de la population de crabes royaux sur l'île Kodiak.
+</div>
+
+<br>
+
+# **Conclusion**
+
+<br>
+
+<div style="text-align: justify;">
+Notre étude a exploré l'impact de la pêche et des changements climatiques sur les populations de crabes royaux de l'île Kodiak, en Alaska. Les analyses statistiques ont révélé plusieurs points clés : 
+
+<br>
+
+1. Nos résultats indiquent que la salinité et la température ont une influence limitée sur les populations de crabes royaux. Bien que statistiquement significative, cette influence reste faible.
+
+2. Une corrélation négative notable entre le nombre de pots levés et le nombre total de crabes a été observée, suggérant un impact substantiel de la pêche sur les populations de crabes. La pêche affecte de manière particulièrement importante les crabes mâles, entraînant un déséquilibre significatif dans le sex-ratio des populations.
+
+3. Le sex-ratio des crabes royaux a montré une tendance à la baisse avec l'augmentation des activités de pêche, réduisant le nombre de mâles par rapport aux femelles.
+
+<br>
+
+Les résultats de cette étude mettent en lumière les défis écologiques auxquels sont confrontées les populations de crabes royaux de l'île Kodiak. L'impact significatif de la pêche, notamment sur les mâles, soulève des inquiétudes quant à la viabilité à long terme de ces populations.
+
+Un déséquilibre dans le sex-ratio peut avoir des conséquences dramatiques sur la reproduction et la dynamique de la population. La sélection de mâles de taille plus petite pourrait être une réponse adaptative à la pression de pêche, mais cette hypothèse nécessite une investigation plus approfondie. De telles adaptations pourraient entraîner des changements dans la structure de taille des populations, affectant potentiellement leur dynamique écologique et évolutive.
+
+Dans une perspective d'ouverture, nous avons essayé de regarder si la pêche entraînait une diminution de la taille des individus (Figure 12). Nos résultats sont exploratoires et non probants de façon significative mais il serait intéressant d'aller plus loin dans l'analyse si nous disposions d'un jeu de données plus conséquent. 
+</div>
+
+<br>
+
+```{r dernier graph, fig.width=12, fig.height=4}
+dstns_data <- read.table("dstns", header = FALSE, col.names = c("Year", "Length_mm", "Juvenile_Females", "Adult_Females", "All_Males"))
+dstns_data <- dstns_data %>%
+  mutate(
+    male_length = All_Males * Length_mm,
+    female_length = Adult_Females * Length_mm,
+    juvenile_female_length = Juvenile_Females * Length_mm
+  )
+dstns_data$Length_mm = NULL
+summarized_data <- aggregate(. ~ Year, data = dstns_data, FUN = sum, na.rm = TRUE)
+summarized_data$Size_Male <- with(summarized_data, male_length / All_Males)
+summarized_data$Size_Female <- with(summarized_data, female_length / Adult_Females)
+summarized_data$Size_Juvenile_Female <- with(summarized_data, juvenile_female_length / Juvenile_Females)
+summarized_data_filtered <- summarized_data %>%
+  filter(Year >= 73, Year <= 82)
+combined_data_size <- merge(summarized_data_filtered, combined_data, by = "Year")
+size_year_plot <- ggplot(combined_data_size, aes(x = Year)) +
+  geom_line(aes(y = Size_Female , color = "Taille des femelles")) +
+  geom_line(aes(y = Size_Male , color = "Taille des mâles")) +
+  geom_line(aes(y = Size_Juvenile_Female , color = "Taille des femelles juvéniles")) +
+  scale_color_manual(values = c("Taille des femelles" = "salmon", 
+                                "Taille des mâles" = "darkred", 
+                                "Taille des femelles juvéniles" = "lightblue3")) +
+  labs(title = "Evolution de la taille des mâles, femelles et juvéniles femelles selon l'année",
+       subtitle = "De 1973 à 1982",
+       x = "Année",
+       y = "Taille moyenne des crabes",
+       color = "Légende") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 8))
+
+size_capture_plot <- ggplot(combined_data_size, aes(x = Total_Catch_Count)) +
+  geom_line(aes(y = Size_Female , color = "Taille des femelles")) +
+  geom_line(aes(y = Size_Male , color = "Taille des mâles")) +
+  geom_line(aes(y = Size_Juvenile_Female , color = "Taille des femelles juvéniles")) +
+  scale_color_manual(values = c("Taille des femelles" = "salmon", 
+                                "Taille des mâles" = "darkred", 
+                                "Taille des femelles juvéniles" = "lightblue3")) +
+  labs(title = "Evolution de la taille des mâles, femelles et juvéniles femelles selon le nombre de capture",
+       subtitle = "De 1973 à 1982",
+       x = "Nombre de capture",
+       y = "Taille moyenne des crabes",
+       color = "Légende") +
+  theme_minimal() + 
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 8))
+
+grid.arrange(size_year_plot, size_capture_plot, ncol = 2)
+```
+<div align="center">
+*Figure 12 : Évolution de la taille des mâles, des adultes femelles et des juvéniles femelles en fonction de l'année (à gauche) et en fonction du nombre de captures (à droite). Une observation notable est la diminution de la taille des crabes, suivie d'une augmentation surprenante, observée sur les deux graphiques. Une analyse statistique plus approfondie serait particulièrement pertinente pour comprendre ces tendances contradictoires et leurs implications écologiques.*
+</div>
+
+<br>
+
+# **Références**
+
+<br>
+
+<div style="text-align: justify;">
+  Amin-Safwan, A., Mardhiyyah, M. P., Izzah-Syafiah, M. A., Muhd-Farouk, H., Manan, H., Mahsol, H. H., Nadirah, M., & Ikhwanuddin, M. (2019). Dataset on reproductive status of ovary mud crab at different salinity levels. Data in Brief, 26, 104426. https://doi.org/10.1016/j.dib.2019.104426
+  
+  Bechtol, W. R., & Kruse, G. H. (2011). Factors Affecting Historical Red King Crab Recruitment Around Kodiak Island, Alaska. Biology and Management of Exploited Crab Populations under Climate Change, 413‑442. https://doi.org/10.4027/bmecpcc.2010.18
+  
+  FAO. (2019). Fishery and Aquaculture Statistics. FAO. https://doi.org/10.4060/cb7874t
+  
+  Ford, J. D., McDowell, G., & Pearce, T. (2015). The adaptation challenge in the Arctic. Nature Climate Change, 5(12), 1046‑1053. https://doi.org/10.1038/nclimate2723
+  
+  Goshima, S., Ashidate, M., Yoshino, K., Wada, S., & Sato, T. (2000). Effects of Sex Ratio on Egg Extrusion Frequency and Mating Behavior of the Spiny King Crab Paralithodes Brevipes (Decapoda: Lithodidae). Journal of Crustacean Biology, 20(3), 479‑482. https://doi.org/10.1163/20021975-99990063
+  
+  Hidir, A., Aaqillah‐Amr, M. A., Mohd‐Sabri, M., Mohd‐Zaidi, I., Shahreza, M. S., Abualreesh, M. H., Peng, T. H., Ma, H., Waiho, K., Fazhan, H., Mukti, A. T., & Ikhwanuddin, M. (2022). Effect of temperature on sex and steroid hormones of purple mud crab, Scylla tranquebarica (Fabricius, 1798) during egg incubation, larvae rearing and juvenile production. Aquaculture Research, 53(11), 4095‑4105. https://doi.org/10.1111/are.15911
+  
+  Hjelset, A. M. (2014). Fishery-induced changes in Norwegian red king crab (Paralithodes camtschaticus) reproductive potential. ICES Journal of Marine Science, 71(2), 365‑373. https://doi.org/10.1093/icesjms/fst126
+  
+  Mia, M., & Shah, M. (2010). Effect of salinity on the survival and growth of mud crabling, Scylla serrata. University Journal of Zoology, Rajshahi University, 29, 29‑32. https://doi.org/10.3329/ujzru.v29i1.9462
+  
+  Ran, J., Chao, N., Yue, L., Chen, G., Wang, Z., Wu, T., & Li, C. (2023). Quantifying the contribution of temperature, salinity, and climate change to sea level rise in the Pacific Ocean: 2005-2019. Frontiers in Marine Science, 10, 1200883. https://doi.org/10.3389/fmars.2023.1200883
+  
+  Stueckle, T. A., Shock, B. C., & Foran, C. M. (2009). Effects of Salinity Stress on Survival, Metabolism, Limb Regeneration, and Ecdysis in Uca Pugnax. Journal of Crustacean Biology, 29(3), 293‑301. https://doi.org/10.1651/08-2990.1
+  
+  Yamanouchi, T., & Takata, K. (2020). Rapid change of the Arctic climate system and its global influences - Overview of GRENE Arctic climate change research project (2011–2016). Polar Science, 25, 100548. https://doi.org/10.1016/j.polar.2020.100548
+</div>
